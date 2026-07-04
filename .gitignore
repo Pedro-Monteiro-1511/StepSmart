@@ -1,0 +1,15 @@
+node_modules/
+dist/
+build/
+.expo/
+.expo-shared/
+*.log
+.env
+.env.*
+!.env.example
+.DS_Store
+coverage/
+.turbo/
+apps/mobile/ios/
+apps/mobile/android/
+.claude/settings.local.json

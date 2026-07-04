@@ -1,0 +1,26 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "api",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["dist/src/main.js"],
+      "cwd": "apps/api",
+      "port": 3000
+    },
+    {
+      "name": "mobile-web",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["expo", "start", "--web"],
+      "cwd": "apps/mobile",
+      "port": 8081
+    },
+    {
+      "name": "mobile-expo-go",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["expo", "start", "--lan"],
+      "cwd": "apps/mobile",
+      "port": 8081
+    }
+  ]
+}

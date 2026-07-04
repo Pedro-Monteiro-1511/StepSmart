@@ -1,0 +1,20 @@
+{
+  "name": "stepsmart",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build:packages": "npm run build --workspace=@stepsmart/game-config && npm run build --workspace=@stepsmart/shared-types",
+    "api:dev": "npm run build:packages && npm run start:dev --workspace=@stepsmart/api",
+    "api:build": "npm run build:packages && npm run build --workspace=@stepsmart/api",
+    "mobile:start": "npm run start --workspace=@stepsmart/mobile",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
+  }
+}

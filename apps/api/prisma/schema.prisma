@@ -1,0 +1,427 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Users
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  username     String   @unique
+  passwordHash String
+  timezone     String   @default("UTC")
+  avatarUrl    String?
+  status       UserStatus @default(ACTIVE)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  lastLoginAt  DateTime?
+
+  character       Character?
+  wallet          Wallet?
+  stepLogs        StepLog[]
+  transactions    Transaction[]
+  xpLogs          XpLog[]
+  inventory       Inventory[]
+  userChallenges  UserDailyChallenge[]
+  dailyStepCredits DailyStepCredit[]
+  streak          UserStreak?
+  clanMembership  ClanMember?
+  ledClans        Clan[]              @relation("ClanLeader")
+  sentInvites     ClanInvite[]        @relation("InviteSender")
+  receivedInvites ClanInvite[]        @relation("InviteReceiver")
+  dungeonRuns     DungeonRun[]
+  dungeonState    UserDungeonState?
+  tavernQuests    UserTavernQuest[]
+}
+
+enum UserStatus {
+  ACTIVE
+  SHADOW_BANNED
+  BANNED
+}
+
+// ---------------------------------------------------------------------------
+// Character / Stats
+// ---------------------------------------------------------------------------
+
+model Character {
+  id          String   @id @default(uuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  level       Int      @default(1)
+  xp          Int      @default(0) // total lifetime xp (level derived from this)
+  skillPoints Int      @default(0)
+  equipped    Json     @default("{}") // { head, body, weapon, shield, pet, title, aura } -> inventoryId
+  appearance  Json     @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  stats CharacterStat[]
+}
+
+model CharacterStat {
+  id          String   @id @default(uuid())
+  characterId String
+  character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  skillKey    String // stamina | strength | agility | endurance | luck | discipline
+  level       Int      @default(1)
+
+  @@unique([characterId, skillKey])
+}
+
+// ---------------------------------------------------------------------------
+// Steps
+// ---------------------------------------------------------------------------
+
+model StepLog {
+  id            String   @id @default(uuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bucketStart   DateTime
+  bucketEnd     DateTime
+  steps         Int
+  distanceMeters Float?
+  activeEnergy  Float?
+  source        String // healthkit | health_connect | manual | mock
+  isManual      Boolean  @default(false)
+  clientBatchId String?
+  createdAt     DateTime @default(now())
+
+  @@unique([userId, bucketStart, bucketEnd, source])
+  @@index([userId, bucketStart])
+}
+
+/// Internal bookkeeping: how many of today's (capped) steps have already been
+/// converted into coins/xp. Lets /steps/sync be called many times a day and stay
+/// idempotent — coins/xp are derived from cumulative totals, never re-added blindly.
+model DailyStepCredit {
+  id            String   @id @default(uuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date          DateTime @db.Date
+  creditedSteps Int      @default(0)
+
+  @@unique([userId, date])
+}
+
+model UserStreak {
+  id               String   @id @default(uuid())
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  currentStreak    Int      @default(0)
+  longestStreak    Int      @default(0)
+  lastActiveDate   DateTime?
+  freezesAvailable Int      @default(1)
+}
+
+// ---------------------------------------------------------------------------
+// Economy
+// ---------------------------------------------------------------------------
+
+model Wallet {
+  id            String   @id @default(uuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  coinsBalance  Int      @default(0)
+  coinsLifetime Int      @default(0)
+  updatedAt     DateTime @updatedAt
+}
+
+model Transaction {
+  id            String   @id @default(uuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type          TransactionType
+  amount        Int // positive credit, negative debit
+  balanceAfter  Int
+  referenceType String?
+  referenceId   String?
+  metadata      Json?
+  createdAt     DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+enum TransactionType {
+  STEP_CREDIT
+  PURCHASE
+  REWARD
+  REFUND
+  ADMIN
+}
+
+model XpLog {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  source      String // steps | mission | challenge | event
+  amount      Int
+  referenceId String?
+  levelBefore Int
+  levelAfter  Int
+  createdAt   DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Items / Inventory
+// ---------------------------------------------------------------------------
+
+model Item {
+  id           String   @id @default(uuid())
+  key          String   @unique
+  name         String
+  description  String
+  category     String // clothing | armor | weapon | shield | pet | title | effect | boost | consumable
+  effectType   ItemEffectType
+  effectPayload Json?
+  rarity       String   @default("common")
+  priceCoins   Int
+  slot         String?
+  minLevel     Int      @default(1)
+  isActive     Boolean  @default(true)
+  assetUrl     String?
+
+  inventoryEntries Inventory[]
+}
+
+enum ItemEffectType {
+  COSMETIC
+  BOOST
+  CONSUMABLE
+}
+
+model Inventory {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  itemId     String
+  item       Item     @relation(fields: [itemId], references: [id])
+  quantity   Int      @default(1)
+  equipped   Boolean  @default(false)
+  acquiredAt DateTime @default(now())
+
+  @@unique([userId, itemId])
+}
+
+// ---------------------------------------------------------------------------
+// Missions / Daily Challenges
+// ---------------------------------------------------------------------------
+
+model DailyChallenge {
+  id            String   @id @default(uuid())
+  date          DateTime @db.Date
+  challengeType String
+  title         String
+  params        Json // { target, deadline?, windowStart?, windowEnd? }
+  difficulty    String   @default("normal")
+  rewardPayload Json // { xp, coins, itemKey? }
+  isMandatory   Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  userChallenges UserDailyChallenge[]
+
+  @@index([date])
+}
+
+model UserDailyChallenge {
+  id               String   @id @default(uuid())
+  userId           String
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dailyChallengeId String
+  dailyChallenge   DailyChallenge @relation(fields: [dailyChallengeId], references: [id])
+  date             DateTime @db.Date
+  progress         Int      @default(0)
+  target           Int
+  status           ChallengeStatus @default(ACTIVE)
+  completedAt      DateTime?
+  rewardClaimed    Boolean  @default(false)
+
+  @@unique([userId, dailyChallengeId])
+  @@index([userId, date])
+}
+
+enum ChallengeStatus {
+  ACTIVE
+  COMPLETED
+  FAILED
+}
+
+// ---------------------------------------------------------------------------
+// Dungeons — idle/simulated combat (§9 of PLANO_TECNICO.md)
+// ---------------------------------------------------------------------------
+
+model Dungeon {
+  id             String   @id @default(uuid())
+  key            String   @unique
+  name           String
+  description    String
+  minLevel       Int      @default(1)
+  difficulty     Int // used in the win-chance calculation against character combat power
+  lootTable      Json // [{ itemKey, weight }, ...]
+  xpRewardWin    Int
+  xpRewardLose   Int
+  coinsRewardWin Int
+  isActive       Boolean  @default(true)
+
+  runs DungeonRun[]
+}
+
+model DungeonRun {
+  id          String       @id @default(uuid())
+  userId      String
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dungeonId   String
+  dungeon     Dungeon      @relation(fields: [dungeonId], references: [id])
+  result      DungeonResult
+  combatLog   Json // array of narrated event strings
+  xpGained    Int
+  coinsGained Int
+  lootItemId  String?
+  createdAt   DateTime     @default(now())
+
+  @@index([userId, createdAt])
+}
+
+enum DungeonResult {
+  WIN
+  LOSE
+}
+
+/// Per-user attempt bookkeeping — attempts regenerate over time (regenDungeonAttempts job)
+/// up to maxAttempts (derived from the Stamina skill); extra attempts can be bought with coins.
+model UserDungeonState {
+  id                       String   @id @default(uuid())
+  userId                   String   @unique
+  user                     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  attemptsAvailable        Int      @default(3)
+  maxAttempts              Int      @default(3)
+  lastRegenAt              DateTime @default(now())
+  extraAttemptsBoughtToday Int      @default(0)
+  date                     DateTime @db.Date // calendar day the extra-purchase counter applies to
+}
+
+// ---------------------------------------------------------------------------
+// Tavern — rotating, time-based quests (§10 of PLANO_TECNICO.md)
+// ---------------------------------------------------------------------------
+
+model TavernQuest {
+  id              String   @id @default(uuid())
+  key             String   @unique
+  title           String
+  description     String
+  durationMinutes Int
+  minLevel        Int      @default(1)
+  costCoins       Int      @default(0)
+  rewardPayload   Json // { xp, coins, itemKey? }
+  isActive        Boolean  @default(true)
+
+  userQuests UserTavernQuest[]
+}
+
+model UserTavernQuest {
+  id            String            @id @default(uuid())
+  userId        String
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tavernQuestId String
+  tavernQuest   TavernQuest       @relation(fields: [tavernQuestId], references: [id])
+  startedAt     DateTime          @default(now())
+  endsAt        DateTime
+  status        TavernQuestStatus @default(IN_PROGRESS)
+  resultPayload Json? // narrative + resolved reward, filled in on completion
+
+  @@index([userId, status])
+}
+
+enum TavernQuestStatus {
+  IN_PROGRESS
+  COMPLETED
+  CLAIMED
+}
+
+// ---------------------------------------------------------------------------
+// Clans (schema ready for Phase 2)
+// ---------------------------------------------------------------------------
+
+model Clan {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  leaderId    String
+  leader      User     @relation("ClanLeader", fields: [leaderId], references: [id])
+  memberCount Int      @default(1)
+  maxMembers  Int      @default(30)
+  xpTotal     Int      @default(0)
+  stepsTotal  Int      @default(0)
+  isPublic    Boolean  @default(true)
+  rank        Int?
+  createdAt   DateTime @default(now())
+
+  members ClanMember[]
+  invites ClanInvite[]
+}
+
+model ClanMember {
+  id                String   @id @default(uuid())
+  clanId            String
+  clan              Clan     @relation(fields: [clanId], references: [id], onDelete: Cascade)
+  userId            String   @unique
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role              ClanRole @default(MEMBER)
+  contributionSteps Int      @default(0)
+  contributionXp    Int      @default(0)
+  joinedAt          DateTime @default(now())
+}
+
+enum ClanRole {
+  LEADER
+  MODERATOR
+  MEMBER
+}
+
+model ClanInvite {
+  id         String   @id @default(uuid())
+  clanId     String
+  clan       Clan     @relation(fields: [clanId], references: [id], onDelete: Cascade)
+  inviterId  String
+  inviter    User     @relation("InviteSender", fields: [inviterId], references: [id])
+  inviteeId  String
+  invitee    User     @relation("InviteReceiver", fields: [inviteeId], references: [id])
+  status     InviteStatus @default(PENDING)
+  createdAt  DateTime @default(now())
+  expiresAt  DateTime?
+
+  @@unique([clanId, inviteeId])
+}
+
+enum InviteStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  EXPIRED
+}
+
+// ---------------------------------------------------------------------------
+// Leaderboard snapshots (live rankings live in Redis ZSETs; this is history)
+// ---------------------------------------------------------------------------
+
+model LeaderboardSnapshot {
+  id        String   @id @default(uuid())
+  scope     String // individual | clan
+  metric    String // steps | xp | level | missions | clan_contribution
+  window    String // daily | weekly | monthly | all_time
+  periodKey String // e.g. 2026-W27
+  subjectId String
+  score     Int
+  rank      Int
+  createdAt DateTime @default(now())
+
+  @@index([scope, metric, window, periodKey])
+}
